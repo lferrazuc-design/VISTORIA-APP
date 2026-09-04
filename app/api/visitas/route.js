@@ -1,28 +1,27 @@
 import { NextResponse } from "next/server";
-import { withClient, ensureTable } from "@/lib/db";
+import { getPool, ensureTable } from "@/lib/db";
 import { computeVisitScores } from "@/lib/scoring";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request) {
   try {
+    await ensureTable();
+    const pool = getPool();
     const { searchParams } = new URL(request.url);
     const codigoFazenda = searchParams.get("codigoFazenda");
     const fornecedor = searchParams.get("fornecedor");
 
-    const visitas = await withClient(async (client) => {
-      await ensureTable(client);
-      let result;
-      if (codigoFazenda) {
-        result = await client.sql`SELECT * FROM visitas WHERE codigo_fazenda = ${codigoFazenda} ORDER BY timestamp DESC`;
-      } else if (fornecedor) {
-        result = await client.sql`SELECT * FROM visitas WHERE fornecedor = ${fornecedor} ORDER BY timestamp DESC`;
-      } else {
-        result = await client.sql`SELECT * FROM visitas ORDER BY timestamp DESC LIMIT 500`;
-      }
-      return result.rows.map(rowToVisit);
-    });
+    let result;
+    if (codigoFazenda) {
+      result = await pool.query("SELECT * FROM visitas WHERE codigo_fazenda = $1 ORDER BY timestamp DESC", [codigoFazenda]);
+    } else if (fornecedor) {
+      result = await pool.query("SELECT * FROM visitas WHERE fornecedor = $1 ORDER BY timestamp DESC", [fornecedor]);
+    } else {
+      result = await pool.query("SELECT * FROM visitas ORDER BY timestamp DESC LIMIT 500");
+    }
 
+    const visitas = result.rows.map(rowToVisit);
     return NextResponse.json({ visitas });
   } catch (err) {
     console.error(err);
@@ -32,6 +31,8 @@ export async function GET(request) {
 
 export async function POST(request) {
   try {
+    await ensureTable();
+    const pool = getPool();
     const body = await request.json();
     const { codigoFazenda, nomeFazenda, talhao, tecnico, fornecedor, itens, overrides, obsGerais } = body;
 
@@ -44,17 +45,12 @@ export async function POST(request) {
     const timestamp = Date.now();
     const dataVisita = new Date(timestamp).toLocaleDateString("pt-BR");
 
-    await withClient(async (client) => {
-      await ensureTable(client);
-      await client.sql`
-        INSERT INTO visitas (id, timestamp, data_visita, codigo_fazenda, nome_fazenda, talhao, tecnico, fornecedor, itens, notas, scores, nota_final, obs_gerais)
-        VALUES (
-          ${id}, ${timestamp}, ${dataVisita}, ${codigoFazenda}, ${nomeFazenda}, ${talhao || ""},
-          ${tecnico}, ${fornecedor}, ${JSON.stringify(itens)}, ${JSON.stringify(notas)},
-          ${JSON.stringify(scores)}, ${notaFinal}, ${obsGerais || ""}
-        )
-      `;
-    });
+    await pool.query(
+      `INSERT INTO visitas (id, timestamp, data_visita, codigo_fazenda, nome_fazenda, talhao, tecnico, fornecedor, itens, notas, scores, nota_final, obs_gerais)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+      [id, timestamp, dataVisita, codigoFazenda, nomeFazenda, talhao || "", tecnico, fornecedor,
+        JSON.stringify(itens), JSON.stringify(notas), JSON.stringify(scores), notaFinal, obsGerais || ""]
+    );
 
     return NextResponse.json({
       visita: { id, timestamp, dataVisita, codigoFazenda, nomeFazenda, talhao, tecnico, fornecedor, itens, notas, scores, notaFinal, obsGerais },
